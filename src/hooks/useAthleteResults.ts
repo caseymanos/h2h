@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
-import { useQuery as useConvexQuery } from 'convex/react';
-import { useMemo } from 'react';
+import { useQuery as useConvexQuery, useMutation as useConvexMutation } from 'convex/react';
+import { useMemo, useEffect, useRef } from 'react';
 import { getAthleteResults } from '@/lib/api';
 import { mergeResults } from '@/lib/matching';
 import { api } from '@/lib/convexApi';
@@ -9,15 +9,42 @@ import type { AthleteResult, SelectedAthlete } from '@/lib/types';
 export function useAthleteResults(athlete: SelectedAthlete | null) {
   const athleteId = athlete?.id ?? null;
 
-  // Step 1: Fetch from World Athletics API (existing behavior)
+  // Step 1: Check Convex cache (24hr TTL, cross-session persistence)
+  const cachedResults = useConvexQuery(
+    api.h2h.getCachedResults,
+    athleteId ? { athleteId } : 'skip'
+  );
+
+  // Step 2: Fetch from World Athletics API — skip if Convex cache is valid
+  const hasCachedData = cachedResults !== undefined && cachedResults !== null;
   const waQuery = useQuery({
     queryKey: ['athlete-results', athleteId],
     queryFn: () => getAthleteResults(athleteId!),
-    enabled: athleteId !== null,
+    enabled: athleteId !== null && !hasCachedData,
     staleTime: 10 * 60 * 1000,
   });
 
-  // Step 2: Query scraped results from Convex by athlete name
+  // Step 3: Persist WA results to Convex cache after fetch
+  const cacheResultsMutation = useConvexMutation(api.h2h.cacheResults);
+  const cachedRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (waQuery.data && athleteId && athlete && cachedRef.current !== athleteId) {
+      cachedRef.current = athleteId;
+      cacheResultsMutation({
+        athleteId,
+        athleteName: `${athlete.firstname} ${athlete.lastname}`,
+        results: waQuery.data,
+      });
+    }
+  }, [waQuery.data, athleteId, athlete, cacheResultsMutation]);
+
+  // Use cached data or fresh WA data
+  const waResults: AthleteResult[] | undefined = hasCachedData
+    ? (cachedResults.results as AthleteResult[])
+    : waQuery.data;
+
+  // Step 4: Query scraped results from Convex by athlete name
   const athleteName = athlete
     ? `${athlete.firstname} ${athlete.lastname}`.toLowerCase()
     : '';
@@ -26,15 +53,15 @@ export function useAthleteResults(athlete: SelectedAthlete | null) {
     athlete ? { athleteName } : 'skip'
   );
 
-  // Step 3: Also query by WA ID (covers results linked by ID)
+  // Step 5: Also query by WA ID (covers results linked by ID)
   const scrapedByWaId = useConvexQuery(
     api.h2h.getScrapedResultsByWaId,
     athleteId ? { athleteWaId: athleteId } : 'skip'
   );
 
-  // Step 4: Merge all results, deduplicating
+  // Step 6: Merge all results, deduplicating
   const mergedData = useMemo(() => {
-    if (!waQuery.data) return undefined;
+    if (!waResults) return undefined;
 
     // Combine scraped results from both queries, dedup by _id
     const allScraped = [...(scrapedByName ?? []), ...(scrapedByWaId ?? [])];
@@ -45,13 +72,13 @@ export function useAthleteResults(athlete: SelectedAthlete | null) {
       return true;
     });
 
-    if (uniqueScraped.length === 0) return waQuery.data;
-    return mergeResults(waQuery.data, uniqueScraped as any);
-  }, [waQuery.data, scrapedByName, scrapedByWaId]);
+    if (uniqueScraped.length === 0) return waResults;
+    return mergeResults(waResults, uniqueScraped as any);
+  }, [waResults, scrapedByName, scrapedByWaId]);
 
   return {
     data: mergedData,
-    isLoading: waQuery.isLoading,
+    isLoading: athleteId !== null && !hasCachedData && waQuery.isLoading,
     error: waQuery.error,
   };
 }

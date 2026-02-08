@@ -6,6 +6,7 @@ import { DisciplineFilter } from '@/components/DisciplineFilter';
 import { MatchupTable } from '@/components/MatchupTable';
 import { MissingRaceButton } from '@/components/MissingRaceButton';
 import { EmptyState } from '@/components/EmptyState';
+import { AthleteResultsTable } from '@/components/AthleteResultsTable';
 import { useAthleteResults } from '@/hooks/useAthleteResults';
 import { useHeadToHead } from '@/hooks/useHeadToHead';
 import type { SelectedAthlete } from '@/lib/types';
@@ -53,6 +54,8 @@ export default function App() {
 
   const isLoading = resultsA.isLoading || resultsB.isLoading;
   const bothSelected = athleteA !== null && athleteB !== null;
+  const singleAthlete = athleteA && !athleteB;
+  const singleAthleteData = singleAthlete ? resultsA : null;
 
   return (
     <div className="min-h-screen">
@@ -91,14 +94,14 @@ export default function App() {
         </div>
 
         {/* Loading state */}
-        {bothSelected && isLoading && (
+        {(bothSelected || singleAthlete) && isLoading && (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="w-6 h-6 animate-spin text-text-muted" />
             <span className="ml-2 text-text-secondary">Loading results...</span>
           </div>
         )}
 
-        {/* Results */}
+        {/* H2H Results (both athletes selected) */}
         {bothSelected && record && !isLoading && (
           <div className="space-y-6 animate-slide-in">
             <RecordSummary athleteA={athleteA!} athleteB={athleteB!} record={record} />
@@ -119,8 +122,29 @@ export default function App() {
           </div>
         )}
 
+        {/* Single athlete results */}
+        {singleAthlete && singleAthleteData?.data && !isLoading && (
+          <div className="space-y-6 animate-slide-in">
+            <DisciplineFilter
+              disciplines={singleAthleteData.data
+                .reduce((acc: string[], r) => {
+                  if (!acc.includes(r.discipline)) acc.push(r.discipline);
+                  return acc;
+                }, [])
+                .sort()}
+              selected={disciplineFilter}
+              onSelect={setDisciplineFilter}
+            />
+            <AthleteResultsTable
+              results={singleAthleteData.data}
+              disciplineFilter={disciplineFilter}
+              athleteName={`${athleteA!.firstname} ${athleteA!.lastname}`}
+            />
+          </div>
+        )}
+
         {/* Empty state */}
-        {!bothSelected && <EmptyState />}
+        {!bothSelected && !singleAthlete && <EmptyState />}
       </main>
     </div>
   );

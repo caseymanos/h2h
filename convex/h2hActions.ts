@@ -18,11 +18,9 @@ const RACES: Record<string, RaceConfig> = {
     sourceKey: "mikatiming-chicago",
     raceName: "Bank of America Chicago Marathon",
     getUrl: (year: number) => {
-      const base =
-        year >= 2025
-          ? `https://results.chicagomarathon.com/${year}/`
-          : `https://chicago-history.r.mikatiming.com/${year}/`;
-      return base;
+      return year >= 2025
+        ? `https://results.chicagomarathon.com/${year}/`
+        : `https://chicago-history.r.mikatiming.com/2024/`;
     },
     raceDate: (year: number) => `${year}-10-12`,
   },
@@ -198,9 +196,11 @@ export const scrapeMarathonResults = action({
     searchUrl.searchParams.set("pid", "search");
     searchUrl.searchParams.set("lang", "EN_CAP");
     searchUrl.searchParams.set("event", "MAR");
-    searchUrl.searchParams.set("event_main_group", "runner");
     searchUrl.searchParams.set("search[name]", args.athleteLastName);
     searchUrl.searchParams.set("search[firstname]", args.athleteFirstName);
+    if (args.raceYear < 2025) {
+      searchUrl.searchParams.set("search[event_date]", String(args.raceYear));
+    }
     searchUrl.searchParams.set("search_sort", "name");
     searchUrl.searchParams.set("num_results", "100");
 
