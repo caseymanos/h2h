@@ -24,6 +24,7 @@ const RACE_LOCATIONS: Record<string, { city: string; country: string }> = {
   'Chicago': { city: 'Chicago', country: 'USA' },
   'Boston': { city: 'Boston', country: 'USA' },
   'London': { city: 'London', country: 'GBR' },
+  'Berlin': { city: 'Berlin', country: 'GER' },
 };
 
 function raceCity(raceName: string): string {

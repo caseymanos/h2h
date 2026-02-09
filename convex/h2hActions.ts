@@ -6,23 +6,30 @@ import { v } from "convex/values";
 
 // ========== RACE CONFIGS ==========
 
+type ScraperType = "mikatiming" | "scc-events";
+
 interface RaceConfig {
   sourceKey: string;
   raceName: string;
-  getUrl: (year: number) => string;
+  scraperType: ScraperType;
+  /** City for location metadata */
+  city: string;
+  // Mika Timing fields
+  getUrl?: (year: number) => string;
   raceDate: (year: number) => string;
   /** Event code for Mika Timing search (e.g. "MAR", "R"). Omit to not filter by event. */
   eventCode?: string;
   /** Whether this race uses a history URL with event_date filter for past years */
   usesEventDateFilter?: boolean;
-  /** City for location metadata */
-  city: string;
+  // SCC Events fields
+  sccEventIdent?: string;
 }
 
 const RACES: Record<string, RaceConfig> = {
   chicago: {
     sourceKey: "mikatiming-chicago",
     raceName: "Bank of America Chicago Marathon",
+    scraperType: "mikatiming",
     getUrl: (year: number) => {
       return year >= 2025
         ? `https://results.chicagomarathon.com/${year}/`
@@ -36,6 +43,7 @@ const RACES: Record<string, RaceConfig> = {
   boston: {
     sourceKey: "mikatiming-boston",
     raceName: "Boston Marathon",
+    scraperType: "mikatiming",
     getUrl: (year: number) => `https://results.baa.org/${year}/`,
     raceDate: (year: number) => `${year}-04-21`,
     city: "Boston",
@@ -43,9 +51,18 @@ const RACES: Record<string, RaceConfig> = {
   london: {
     sourceKey: "mikatiming-london",
     raceName: "TCS London Marathon",
+    scraperType: "mikatiming",
     getUrl: (year: number) => `https://results.tcslondonmarathon.com/${year}/`,
     raceDate: (year: number) => `${year}-04-21`,
     city: "London",
+  },
+  berlin: {
+    sourceKey: "scc-berlin",
+    raceName: "BMW Berlin Marathon",
+    scraperType: "scc-events",
+    sccEventIdent: "BM",
+    raceDate: (year: number) => `${year}-09-29`,
+    city: "Berlin",
   },
 };
 
@@ -204,6 +221,111 @@ function nameMatches(
   return false;
 }
 
+// ========== SCC EVENTS API (Berlin Marathon) ==========
+
+interface SccCompetition {
+  competition_ident: string;
+  tablename: string;
+  label_en: string;
+}
+
+interface SccEdition {
+  year: number;
+  competitions: SccCompetition[];
+}
+
+interface SccResult {
+  name: string;
+  vorname: string;
+  nachname: string;
+  sex: string;
+  nation: string;
+  platz: number;
+  sex_platz: number;
+  ak: string;
+  netto: string;
+  brutto: string;
+  startnummer: string;
+}
+
+async function scrapeSccEvents(
+  eventIdent: string,
+  year: number,
+  firstName: string,
+  lastName: string
+): Promise<ParsedResult[]> {
+  // Step 1: Fetch event config to get correct competition_ident and tablename
+  const configResp = await fetch(
+    `https://api.results.scc-events.com/event/${eventIdent}?l=en`
+  );
+  if (!configResp.ok) {
+    throw new Error(`SCC config fetch failed: ${configResp.status}`);
+  }
+  const configData = await configResp.json();
+  const editions: Record<string, SccEdition> = configData.data[0].editions;
+  const edition = editions[String(year)];
+  if (!edition) {
+    throw new Error(
+      `No ${eventIdent} edition for ${year}. Available: ${Object.keys(editions).sort().join(", ")}`
+    );
+  }
+
+  // Find the "Runner" competition
+  const runnerComp = edition.competitions.find(
+    (c: SccCompetition) => c.label_en === "Runner"
+  );
+  if (!runnerComp) {
+    throw new Error(
+      `No Runner competition for ${eventIdent} ${year}`
+    );
+  }
+
+  // Step 2: Search for the athlete using DataTables server-side format
+  const params = new URLSearchParams({
+    ek: eventIdent,
+    ci: runnerComp.competition_ident,
+    y: String(year),
+    t: runnerComp.tablename,
+    draw: "1",
+    start: "0",
+    length: "20",
+    "columns[0][data]": "platz",
+    "columns[0][searchable]": "false",
+    "columns[1][data]": "startnummer",
+    "columns[1][searchable]": "true",
+    "columns[2][data]": "nachname",
+    "columns[2][searchable]": "true",
+    "columns[3][data]": "vorname",
+    "columns[3][searchable]": "true",
+    "columns[4][data]": "verein",
+    "columns[4][searchable]": "true",
+    "columns[5][data]": "nation",
+    "columns[5][searchable]": "true",
+    "search[value]": lastName,
+    "search[regex]": "false",
+  });
+
+  const resultResp = await fetch(
+    `https://api.results.scc-events.com/result?${params.toString()}`
+  );
+  if (!resultResp.ok) {
+    throw new Error(`SCC result fetch failed: ${resultResp.status}`);
+  }
+  const resultData = await resultResp.json();
+
+  return (resultData.data as SccResult[]).map((r) => ({
+    name: `${r.nachname}, ${r.vorname}`,
+    country: r.nation || "",
+    placeOverall: r.platz,
+    placeGender: r.sex_platz,
+    bib: r.startnummer || "",
+    division: r.ak || "",
+    finish: r.netto || "",
+    year,
+    event: "",
+  }));
+}
+
 // ========== SCRAPE ACTION ==========
 
 export const scrapeMarathonResults = action({
@@ -222,30 +344,43 @@ export const scrapeMarathonResults = action({
       );
     }
 
-    const baseUrl = config.getUrl(args.raceYear);
-    const searchUrl = new URL(baseUrl);
-    searchUrl.searchParams.set("pid", "search");
-    searchUrl.searchParams.set("lang", "EN_CAP");
-    if (config.eventCode) {
-      searchUrl.searchParams.set("event", config.eventCode);
-    }
-    searchUrl.searchParams.set("search[name]", args.athleteLastName);
-    searchUrl.searchParams.set("search[firstname]", args.athleteFirstName);
-    if (config.usesEventDateFilter && args.raceYear < 2025) {
-      searchUrl.searchParams.set("search[event_date]", String(args.raceYear));
-    }
-    searchUrl.searchParams.set("search_sort", "name");
-    searchUrl.searchParams.set("num_results", "100");
+    let parsed: ParsedResult[];
 
-    const resp = await fetch(searchUrl.toString());
-    if (!resp.ok) {
-      throw new Error(
-        `Mika Timing fetch failed: ${resp.status} ${resp.statusText}`
+    if (config.scraperType === "scc-events") {
+      // SCC Events API (Berlin, etc.)
+      parsed = await scrapeSccEvents(
+        config.sccEventIdent!,
+        args.raceYear,
+        args.athleteFirstName,
+        args.athleteLastName
       );
-    }
+    } else {
+      // Mika Timing HTML scraper (Chicago, Boston, London)
+      const baseUrl = config.getUrl!(args.raceYear);
+      const searchUrl = new URL(baseUrl);
+      searchUrl.searchParams.set("pid", "search");
+      searchUrl.searchParams.set("lang", "EN_CAP");
+      if (config.eventCode) {
+        searchUrl.searchParams.set("event", config.eventCode);
+      }
+      searchUrl.searchParams.set("search[name]", args.athleteLastName);
+      searchUrl.searchParams.set("search[firstname]", args.athleteFirstName);
+      if (config.usesEventDateFilter && args.raceYear < 2025) {
+        searchUrl.searchParams.set("search[event_date]", String(args.raceYear));
+      }
+      searchUrl.searchParams.set("search_sort", "name");
+      searchUrl.searchParams.set("num_results", "100");
 
-    const html = await resp.text();
-    const parsed = parseResultsHtml(html);
+      const resp = await fetch(searchUrl.toString());
+      if (!resp.ok) {
+        throw new Error(
+          `Mika Timing fetch failed: ${resp.status} ${resp.statusText}`
+        );
+      }
+
+      const html = await resp.text();
+      parsed = parseResultsHtml(html);
+    }
 
     const match = parsed.find((r) =>
       nameMatches(r.name, args.athleteFirstName, args.athleteLastName)
