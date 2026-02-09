@@ -11,6 +11,16 @@ const SUPPORTED_RACES: SupportedRace[] = [
     label: 'Chicago Marathon',
     years: Array.from({ length: 2026 - 2015 }, (_, i) => 2025 - i),
   },
+  {
+    key: 'boston',
+    label: 'Boston Marathon',
+    years: Array.from({ length: 2026 - 2018 }, (_, i) => 2025 - i),
+  },
+  {
+    key: 'london',
+    label: 'London Marathon',
+    years: [2025, 2024],
+  },
 ];
 
 interface Props {

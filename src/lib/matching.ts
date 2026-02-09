@@ -20,6 +20,26 @@ export function filterResults(results: AthleteResult[]): AthleteResult[] {
   return results.filter((r) => isFinal(r.race) && !isRelay(r.discipline));
 }
 
+const RACE_LOCATIONS: Record<string, { city: string; country: string }> = {
+  'Chicago': { city: 'Chicago', country: 'USA' },
+  'Boston': { city: 'Boston', country: 'USA' },
+  'London': { city: 'London', country: 'GBR' },
+};
+
+function raceCity(raceName: string): string {
+  for (const [key, loc] of Object.entries(RACE_LOCATIONS)) {
+    if (raceName.includes(key)) return loc.city;
+  }
+  return '';
+}
+
+function raceCountry(raceName: string): string {
+  for (const [key, loc] of Object.entries(RACE_LOCATIONS)) {
+    if (raceName.includes(key)) return loc.country;
+  }
+  return '';
+}
+
 /** Convert a scraped result into the AthleteResult shape used for matching */
 function scrapedToAthleteResult(s: ScrapedResult): AthleteResult {
   return {
@@ -40,8 +60,8 @@ function scrapedToAthleteResult(s: ScrapedResult): AthleteResult {
     isTechnical: false,
     location: {
       stadium: null,
-      city: s.raceName.includes('Chicago') ? 'Chicago' : '',
-      country: 'USA',
+      city: raceCity(s.raceName),
+      country: raceCountry(s.raceName),
       indoor: false,
     },
     records: [],

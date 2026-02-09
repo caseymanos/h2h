@@ -11,6 +11,12 @@ interface RaceConfig {
   raceName: string;
   getUrl: (year: number) => string;
   raceDate: (year: number) => string;
+  /** Event code for Mika Timing search (e.g. "MAR", "R"). Omit to not filter by event. */
+  eventCode?: string;
+  /** Whether this race uses a history URL with event_date filter for past years */
+  usesEventDateFilter?: boolean;
+  /** City for location metadata */
+  city: string;
 }
 
 const RACES: Record<string, RaceConfig> = {
@@ -23,6 +29,23 @@ const RACES: Record<string, RaceConfig> = {
         : `https://chicago-history.r.mikatiming.com/2024/`;
     },
     raceDate: (year: number) => `${year}-10-12`,
+    eventCode: "MAR",
+    usesEventDateFilter: true,
+    city: "Chicago",
+  },
+  boston: {
+    sourceKey: "mikatiming-boston",
+    raceName: "Boston Marathon",
+    getUrl: (year: number) => `https://results.baa.org/${year}/`,
+    raceDate: (year: number) => `${year}-04-21`,
+    city: "Boston",
+  },
+  london: {
+    sourceKey: "mikatiming-london",
+    raceName: "TCS London Marathon",
+    getUrl: (year: number) => `https://results.tcslondonmarathon.com/${year}/`,
+    raceDate: (year: number) => `${year}-04-21`,
+    city: "London",
   },
 };
 
@@ -82,11 +105,19 @@ function parseResultsHtml(html: string): ParsedResult[] {
     if (!nameMatch) continue;
 
     const fullNameRaw = nameMatch[1].trim();
+    // Name can be "Lastname, Firstname (CTZ)" or just "Lastname, Firstname"
     const nameCountryMatch = fullNameRaw.match(/^(.+?)\s*\((\w+)\)\s*$/);
-    if (!nameCountryMatch) continue;
-
-    const name = nameCountryMatch[1].trim();
-    const country = nameCountryMatch[2];
+    let name: string;
+    let country: string;
+    if (nameCountryMatch) {
+      name = nameCountryMatch[1].trim();
+      country = nameCountryMatch[2];
+    } else if (fullNameRaw.includes(",")) {
+      name = fullNameRaw;
+      country = "";
+    } else {
+      continue;
+    }
 
     const placeOverallRaw = extractText(
       item,
@@ -195,10 +226,12 @@ export const scrapeMarathonResults = action({
     const searchUrl = new URL(baseUrl);
     searchUrl.searchParams.set("pid", "search");
     searchUrl.searchParams.set("lang", "EN_CAP");
-    searchUrl.searchParams.set("event", "MAR");
+    if (config.eventCode) {
+      searchUrl.searchParams.set("event", config.eventCode);
+    }
     searchUrl.searchParams.set("search[name]", args.athleteLastName);
     searchUrl.searchParams.set("search[firstname]", args.athleteFirstName);
-    if (args.raceYear < 2025) {
+    if (config.usesEventDateFilter && args.raceYear < 2025) {
       searchUrl.searchParams.set("search[event_date]", String(args.raceYear));
     }
     searchUrl.searchParams.set("search_sort", "name");
